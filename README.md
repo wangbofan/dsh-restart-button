@@ -62,7 +62,7 @@ Windows 的「应用 / 编辑」菜单栏不是原生菜单条，而是桌面端
 
 ### 方式 A：用 dsh-super-injector（最省事，热装配免重启）
 
-如果你装了 [dsh-super-injector](https://github.com/)，直接注入本目录的绝对路径：
+如果你装了 **dsh-super-injector**（DSH 插件运行时注入器），直接注入本目录的绝对路径：
 
 ```
 dev_inject_plugin   dir=<本插件目录绝对路径>
