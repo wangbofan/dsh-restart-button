@@ -1,0 +1,50 @@
+{
+  "name": "dsh-restart-button",
+  "version": "1.0.0",
+  "description": "DSH desktop titlebar menu: a Restart button that closes and relaunches the whole app (shell + Host).",
+  "type": "module",
+  "main": "host.js",
+  "exports": {
+    ".": "./host.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "files": [
+    "host.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "assets/"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "desktop",
+    "windows",
+    "restart",
+    "relaunch"
+  ],
+  "author": "wangbofan",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wangbofan/dsh-restart-button.git"
+  },
+  "homepage": "https://github.com/wangbofan/dsh-restart-button#readme",
+  "bugs": {
+    "url": "https://github.com/wangbofan/dsh-restart-button/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="190" viewBox="0 0 720 190" role="img" aria-label="DSH titlebar menu bar with a Restart button">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1d1f24"/>
+      <stop offset="1" stop-color="#15171b"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="720" height="190" rx="12" fill="url(#bg)" stroke="#2c3038"/>
+
+  <!-- window titlebar -->
+  <rect x="12" y="12" width="696" height="46" rx="8" fill="#22252b" stroke="#2c3038"/>
+  <text x="30" y="41" font-family="Segoe UI, sans-serif" font-size="13" fill="#8b919c">DeepSeek Harness</text>
+
+  <!-- menu bar buttons -->
+  <g font-family="Segoe UI, sans-serif" font-size="14">
+    <rect x="150" y="21" width="56" height="28" rx="6" fill="none"/>
+    <text x="164" y="40" fill="#b9bfc9">应用</text>
+    <rect x="212" y="21" width="56" height="28" rx="6" fill="none"/>
+    <text x="226" y="40" fill="#b9bfc9">编辑</text>
+
+    <!-- the plugin's button -->
+    <rect x="274" y="21" width="62" height="28" rx="6" fill="#2f4a6d" stroke="#4b7dbb"/>
+    <text x="288" y="40" fill="#dce7f7">重启</text>
+    <path d="M344 35 h16" stroke="#4b7dbb" stroke-width="1" stroke-dasharray="3 3"/>
+    <text x="368" y="40" fill="#6f7683" font-size="12">← 本插件添加</text>
+  </g>
+
+  <!-- dropdown preview -->
+  <g font-family="Segoe UI, sans-serif" font-size="13">
+    <rect x="150" y="70" width="240" height="106" rx="8" fill="#26292f" stroke="#33373f"/>
+    <text x="166" y="93" fill="#c8ced8">关于 DeepSeek Harness</text>
+    <line x1="158" y1="104" x2="382" y2="104" stroke="#3a3e47"/>
+    <text x="166" y="124" fill="#c8ced8">检查更新…</text>
+    <text x="166" y="146" fill="#c8ced8">管理 dsh 命令…</text>
+    <line x1="158" y1="157" x2="382" y2="157" stroke="#3a3e47"/>
+    <text x="166" y="172" fill="#c8ced8">退出</text>
+  </g>
+  <text x="404" y="126" font-family="Segoe UI, sans-serif" font-size="12" fill="#6f7683">原生「应用」下拉在主进程里构建，</text>
+  <text x="404" y="144" font-family="Segoe UI, sans-serif" font-size="12" fill="#6f7683">插件无法插入菜单项 —— 所以按钮</text>
+  <text x="404" y="162" font-family="Segoe UI, sans-serif" font-size="12" fill="#6f7683">做在菜单栏上、紧邻「应用」。</text>
+</svg>

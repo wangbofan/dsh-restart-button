@@ -1,0 +1,5 @@
+# dsh-restart-button — bundle patch.
+# Mounts the plugin into the profile that lists this package in dsh.profile.bundles.
+- insert:
+    - id: restart-button
+      name: dsh-restart-button
