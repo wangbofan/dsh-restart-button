@@ -11,20 +11,29 @@
  * exactly what this route does:
  *
  *   GET  /restart-button/status   → { ok, available, reason, exe, mainPid, ... }
- *   POST /restart-button/restart  → schedules a detached PowerShell helper that
- *                                   terminates every process of this application
- *                                   (main + Host + renderers) and relaunches the exe.
+ *   POST /restart-button/restart  → schedules a detached helper that terminates every
+ *                                   process of this application (main + Host + renderers)
+ *                                   and relaunches the exe with the same command line.
  *
- * The helper is created through WMI (`Win32_Process.Create`) on purpose: a process made
- * that way belongs to WmiPrvSE, not to this application's process tree, so killing the
- * tree cannot take the helper down with it. A plain detached child is kept as a fallback
- * (it also survives because the kill is done by executable path, not by process tree).
+ * Helper design, and why it is a `.vbs` run by `wscript.exe`:
+ *
+ *   1. It must outlive the process tree it kills, so it is created through WMI
+ *      (`Win32_Process.Create`): the helper belongs to WmiPrvSE, not to this application,
+ *      which is also why a plain detached child is *not* used as the primary path.
+ *   2. It must not put anything on screen. A PowerShell helper is a console program: even
+ *      with `-WindowStyle Hidden`, Windows Terminal (the default console host on Windows 11)
+ *      opens a visible tab for it, and anything the relaunched app writes to stdout — the
+ *      `dsh web:` banner and plugin logs — lands in that window. `wscript.exe` is a
+ *      GUI-subsystem host, so no console is ever created.
+ *   3. It must not spawn console tools either: `taskkill`, `Start-Process` and friends each
+ *      allocate their own console. Every process operation below therefore goes through WMI
+ *      (`Win32_Process.Terminate` / `Win32_Process.Create`).
  *
  * The route is fenced the same way the shipped plugins fence theirs: loopback Host,
  * same-origin (or `dsh-app://app`) origin, no cross-site requests.
  */
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -38,11 +47,14 @@ const SHELL_APP_ORIGIN = "dsh-app://app";
 const LOG_PATH = join(tmpdir(), "dsh-restart-button.log");
 /** Grace period before the helper closes the app, so the HTTP answer can reach the page. */
 const HELPER_DELAY_MS = 1500;
+/** How long to wait for the helper's first log line before reporting a failed restart. */
+const HELPER_START_TIMEOUT_MS = 2000;
 
-const POWERSHELL =
-  process.platform === "win32"
-    ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-    : "powershell.exe";
+const SYSTEM32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
+/** The helper itself: GUI-subsystem, never allocates a console. */
+const WSCRIPT = join(SYSTEM32, "wscript.exe");
+/** Only used to ask the WMI service to create the helper — spawned hidden. */
+const POWERSHELL = join(SYSTEM32, "WindowsPowerShell", "v1.0", "powershell.exe");
 
 /* ------------------------------------------------------------------ HTTP helpers */
 
@@ -95,21 +107,23 @@ function sendJson(response, status, payload) {
 /* ------------------------------------------------------------------ capability */
 
 /**
- * A real restart needs three things: Windows (the helper is PowerShell), an Electron
- * runtime, and a supervising parent process to close and relaunch — i.e. the desktop app.
- * A plain `dsh web` host fails the third test and reports `available: false`.
+ * A real restart needs four things: Windows, an Electron runtime, a supervising parent
+ * process to close and relaunch — i.e. the desktop app — and a usable Windows Script Host
+ * for the helper. A plain `dsh web` host fails the third test and reports `available: false`.
  */
 function capabilities() {
   const exe = process.execPath;
   const windows = process.platform === "win32";
   const electron = typeof process.versions.electron === "string";
   const supervised = typeof process.send === "function";
+  const wsh = windows && existsSync(WSCRIPT);
   let reason;
   if (!windows) reason = "platform";
   else if (!electron) reason = "not-electron";
   else if (!supervised) reason = "not-supervised";
+  else if (!wsh) reason = "no-wscript";
   return {
-    available: windows && electron && supervised,
+    available: windows && electron && supervised && wsh,
     reason,
     platform: process.platform,
     exe,
@@ -118,6 +132,7 @@ function capabilities() {
     mainPid: process.ppid,
     hostPid: process.pid,
     electronVersion: process.versions.electron,
+    helper: "wscript+vbs",
     logPath: LOG_PATH
   };
 }
@@ -133,94 +148,181 @@ function quoteWin(value) {
   return /[\s"]/.test(text) ? `"${text.replace(/"/g, '\\"')}"` : text;
 }
 
+/** VBScript string literal: `"` is doubled. */
+function vbsString(value) {
+  return `"${String(value).replace(/"/g, '""')}"`;
+}
+
 /**
- * PowerShell helper: wait a moment (let the HTTP answer flush), close every process of
- * this application, wait until it is really gone, then start it again with the same
- * command line it had before — the same thing Electron's `app.relaunch()` does.
+ * VBScript helper: wait a moment (let the HTTP answer flush), close every process of this
+ * application, wait until it is really gone, then start it again with the same command line
+ * it had before — the same thing Electron's `app.relaunch()` does, minus the console window.
  *
- * Exported for the self-test (`tools/helper-script.mjs`), which generates the script with
- * `dryRun` and executes it without touching the running application.
+ * Exported so the self-test (`tools/self-test.mjs`) can generate it with `dryRun` and run it
+ * without touching the running application.
  */
-export function helperScript(caps, options = {}) {
+export function helperVbs(caps, options = {}) {
   const dryRun = options.dryRun === true;
-  const lines = [
-    "# dsh-restart-button helper — closes the DSH desktop app and starts it again.",
-    "$ErrorActionPreference = 'SilentlyContinue'",
-    `$MainPid = ${caps.mainPid}`,
-    `$Exe = ${psQuote(caps.exe)}`,
-    `$AppName = ${psQuote(caps.appName)}`,
-    `$WorkDir = ${psQuote(caps.workdir)}`,
-    `$LogPath = ${psQuote(LOG_PATH)}`,
-    `$DryRun = ${dryRun ? "$true" : "$false"}`,
+  const delayMs = Number.isInteger(options.delayMs) ? options.delayMs : HELPER_DELAY_MS;
+  return [
+    "' dsh-restart-button helper - closes the DSH desktop app and starts it again.",
+    "' Hosted by wscript.exe (GUI subsystem: no console window is ever created) and every",
+    "' process operation goes through WMI, so no console tool is launched either.",
+    "On Error Resume Next",
+    "Dim Fso, Wmi, LogPath, MainPid, ExePath, AppName, WorkDir, DryRun, DelayMs",
+    `LogPath = ${vbsString(LOG_PATH)}`,
+    `MainPid = ${Number(caps.mainPid) || 0}`,
+    `ExePath = ${vbsString(caps.exe)}`,
+    `AppName = ${vbsString(caps.appName)}`,
+    `WorkDir = ${vbsString(caps.workdir)}`,
+    `DryRun = ${dryRun ? "True" : "False"}`,
+    `DelayMs = ${delayMs}`,
+    'Set Fso = CreateObject("Scripting.FileSystemObject")',
+    'Set Wmi = GetObject("winmgmts:{impersonationLevel=impersonate}!\\\\.\\root\\cimv2")',
     "",
-    "function Write-Log([string]$Text) {",
-    "  try { Add-Content -LiteralPath $LogPath -Value ('[{0}] {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $Text) -Encoding UTF8 } catch { }",
-    "}",
+    "Sub WriteLog(Text)",
+    "  Dim f",
+    "  On Error Resume Next",
+    "  Set f = Fso.OpenTextFile(LogPath, 8, True)",
+    "  If Err.Number = 0 Then",
+    '    f.WriteLine "[" & Stamp() & "] " & Text',
+    "    f.Close",
+    "  End If",
+    "  Err.Clear",
+    "End Sub",
     "",
-    "function Get-AppProcesses {",
-    "  $found = @()",
-    "  try {",
-    "    $found = @(Get-CimInstance Win32_Process -Filter (\"Name='\" + $AppName + \"'\") |",
-    "      Where-Object { $_.ExecutablePath -eq $Exe } | Select-Object -ExpandProperty ProcessId)",
-    "  } catch { }",
-    "  return $found",
-    "}",
+    "Function Pad2(Value)",
+    '  If Len(CStr(Value)) < 2 Then Pad2 = "0" & CStr(Value) Else Pad2 = CStr(Value)',
+    "End Function",
     "",
-    "Write-Log ('helper started pid=' + $PID + ' target=' + $MainPid)",
-    `Start-Sleep -Milliseconds ${HELPER_DELAY_MS}`,
+    "Function Stamp()",
+    "  Dim d",
+    "  d = Now",
+    '  Stamp = CStr(Year(d)) & "-" & Pad2(Month(d)) & "-" & Pad2(Day(d)) & " " & Pad2(Hour(d)) & ":" & Pad2(Minute(d)) & ":" & Pad2(Second(d))',
+    "End Function",
     "",
-    "$commandLine = ''",
-    "try { $commandLine = (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $MainPid)).CommandLine } catch { }",
-    "Write-Log ('main command line: ' + $commandLine)",
+    "' Every process of this application: same image name and same executable path.",
+    "Function AppPids()",
+    "  Dim q, p, list",
+    '  list = ""',
+    '  On Error Resume Next',
+    "  Set q = Wmi.ExecQuery(\"SELECT ProcessId, ExecutablePath FROM Win32_Process WHERE Name='\" & AppName & \"'\")",
+    "  For Each p In q",
+    "    If IsNull(p.ExecutablePath) Then",
+    '      list = list & p.ProcessId & ","',
+    "    ElseIf LCase(p.ExecutablePath) = LCase(ExePath) Then",
+    '      list = list & p.ProcessId & ","',
+    "    End If",
+    "  Next",
+    "  Err.Clear",
+    '  If Len(list) > 0 Then list = Left(list, Len(list) - 1)',
+    "  AppPids = list",
+    "End Function",
     "",
-    "$targets = @(Get-AppProcesses)",
-    "if ($targets.Count -eq 0) { $targets = @($MainPid) }",
-    "Write-Log ('targets: ' + ($targets -join ', '))",
-    "if ($DryRun) {",
-    "  Write-Log 'dry run: the application is left running'",
-    "} else {",
-    "  foreach ($target in $targets) {",
-    "    try { Invoke-CimMethod -InputObject (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $target)) -MethodName Terminate | Out-Null } catch { }",
-    "    try { & taskkill.exe /PID $target /T /F 2>$null | Out-Null } catch { }",
-    "  }",
-    "  $deadline = (Get-Date).AddSeconds(30)",
-    "  while ((Get-Date) -lt $deadline) {",
-    "    if (@(Get-AppProcesses).Count -eq 0) { break }",
-    "    Start-Sleep -Milliseconds 300",
-    "  }",
-    "  $left = @(Get-AppProcesses)",
-    "  if ($left.Count -gt 0) {",
-    "    Write-Log ('still running, killing by image name: ' + ($left -join ', '))",
-    "    try { & taskkill.exe /IM $AppName /F 2>$null | Out-Null } catch { }",
-    "    Start-Sleep -Milliseconds 800",
-    "  }",
-    "  Start-Sleep -Milliseconds 1200",
-    "}",
+    "' WMI termination: no console kill utility is involved, so no console appears.",
+    "Sub TerminatePid(Text)",
+    "  Dim p",
+    "  On Error Resume Next",
+    "  Set p = Wmi.Get(\"Win32_Process.Handle='\" & Text & \"'\")",
+    "  If Not p Is Nothing Then p.Terminate()",
+    "  Err.Clear",
+    "End Sub",
     "",
-    "$appArgs = ''",
-    "if ($commandLine -ne '') {",
-    "  $trimmed = $commandLine.Trim()",
-    "  if ($trimmed.StartsWith('\"')) {",
-    "    $end = $trimmed.IndexOf('\"', 1)",
-    "    if ($end -gt 0) { $appArgs = $trimmed.Substring($end + 1).Trim() }",
-    "  } else {",
-    "    $end = $trimmed.IndexOf(' ')",
-    "    if ($end -gt 0) { $appArgs = $trimmed.Substring($end + 1).Trim() }",
-    "  }",
-    "}",
+    "Function MainCommandLine()",
+    "  Dim p",
+    '  MainCommandLine = ""',
+    "  On Error Resume Next",
+    "  Set p = Wmi.Get(\"Win32_Process.Handle='\" & MainPid & \"'\")",
+    "  If Not p Is Nothing And Not IsNull(p.CommandLine) Then MainCommandLine = p.CommandLine",
+    "  Err.Clear",
+    "End Function",
     "",
-    "if ($DryRun) {",
-    "  Write-Log ('dry run: would start: ' + $Exe + ' ' + $appArgs)",
-    "} else {",
-    "  Write-Log ('starting: ' + $Exe + ' ' + $appArgs)",
-    "  try {",
-    "    if ($appArgs -ne '') { Start-Process -FilePath $Exe -WorkingDirectory $WorkDir -ArgumentList $appArgs } else { Start-Process -FilePath $Exe -WorkingDirectory $WorkDir }",
-    "    Write-Log 'started'",
-    "  } catch { Write-Log ('start failed: ' + $_.Exception.Message) }",
-    "}",
+    "' Everything after the executable path of the original command line.",
+    "Function ExtraArgs(CommandLine)",
+    "  Dim t, idx",
+    '  ExtraArgs = ""',
+    "  t = Trim(CommandLine)",
+    '  If t = "" Then Exit Function',
+    '  If Left(t, 1) = """" Then',
+    '    idx = InStr(2, t, """")',
+    "    If idx > 0 Then ExtraArgs = Trim(Mid(t, idx + 1))",
+    "  Else",
+    '    idx = InStr(t, " ")',
+    "    If idx > 0 Then ExtraArgs = Trim(Mid(t, idx + 1))",
+    "  End If",
+    "End Function",
+    "",
+    "' WMI process creation: a GUI process, no console, no inherited stdout.",
+    "Function LaunchApp(Args)",
+    "  Dim cls, method, inParams, outParams, cmd",
+    "  LaunchApp = 0",
+    "  On Error Resume Next",
+    '  cmd = """" & ExePath & """"',
+    '  If Args <> "" Then cmd = cmd & " " & Args',
+    '  Set cls = Wmi.Get("Win32_Process")',
+    '  Set method = cls.Methods_("Create")',
+    "  Set inParams = method.InParameters.SpawnInstance_()",
+    "  inParams.CommandLine = cmd",
+    "  inParams.CurrentDirectory = WorkDir",
+    '  Set outParams = cls.ExecMethod_("Create", inParams)',
+    "  If Err.Number <> 0 Then",
+    "    Err.Clear",
+    '    Set outParams = Wmi.ExecMethod("Win32_Process", "Create", inParams)',
+    "  End If",
+    "  If Err.Number <> 0 Or outParams Is Nothing Then",
+    "    LaunchApp = -1",
+    "  ElseIf outParams.ReturnValue <> 0 Then",
+    "    LaunchApp = -outParams.ReturnValue",
+    "  Else",
+    "    LaunchApp = CLng(outParams.ProcessId)",
+    "  End If",
+    "  Err.Clear",
+    "End Function",
+    "",
+    "Dim commandLine, args, targets, left, parts, i, waited, created, rounds",
+    'WriteLog "helper started (wscript) target=" & MainPid',
+    "WScript.Sleep DelayMs",
+    "commandLine = MainCommandLine()",
+    'WriteLog "main command line: " & commandLine',
+    "args = ExtraArgs(commandLine)",
+    "targets = AppPids()",
+    'If targets = "" Then targets = CStr(MainPid)',
+    'WriteLog "targets: " & targets',
+    "If DryRun Then",
+    '  WriteLog "dry run: the application is left running"',
+    '  WriteLog "dry run: would start: " & ExePath & " " & args',
+    "Else",
+    '  parts = Split(targets, ",")',
+    "  For i = 0 To UBound(parts)",
+    '    If Trim(parts(i)) <> "" Then TerminatePid Trim(parts(i))',
+    "  Next",
+    "  waited = 0",
+    "  rounds = 0",
+    "  left = AppPids()",
+    '  Do While left <> "" And waited < 30000',
+    "    WScript.Sleep 300",
+    "    waited = waited + 300",
+    "    If waited Mod 3000 = 0 And rounds < 8 Then",
+    "      rounds = rounds + 1",
+    '      parts = Split(left, ",")',
+    "      For i = 0 To UBound(parts)",
+    '        If Trim(parts(i)) <> "" Then TerminatePid Trim(parts(i))',
+    "      Next",
+    "    End If",
+    "    left = AppPids()",
+    "  Loop",
+    '  If left <> "" Then WriteLog "still running after " & waited & " ms: " & left',
+    "  WScript.Sleep 1200",
+    '  WriteLog "starting: " & ExePath & " " & args',
+    "  created = LaunchApp(args)",
+    "  If created > 0 Then",
+    '    WriteLog "started pid=" & created',
+    "  Else",
+    '    WriteLog "start failed (Win32_Process.Create returned " & created & ")"',
+    "  End If",
+    "End If",
     ""
-  ];
-  return lines.join("\r\n");
+  ].join("\r\n");
 }
 
 /* ------------------------------------------------------------------ launchers */
@@ -260,7 +362,10 @@ function runPowerShell(args, timeoutMs) {
   });
 }
 
-/** Preferred: let the WMI service own the helper process (outside our process tree). */
+/**
+ * Let the WMI service own the helper process (outside our process tree). This launcher is a
+ * hidden PowerShell (`windowsHide` → CREATE_NO_WINDOW), so it stays invisible as well.
+ */
 function launchViaWmi(commandLine) {
   const script = [
     "$ErrorActionPreference = 'Stop'",
@@ -271,40 +376,69 @@ function launchViaWmi(commandLine) {
   return runPowerShell(["-NoProfile", "-NonInteractive", "-Command", script], 20000);
 }
 
-function launchDetached(args) {
-  const child = spawn(POWERSHELL, args, { detached: true, stdio: "ignore", windowsHide: true });
-  child.unref();
-}
-
 /* ------------------------------------------------------------------ route */
 
-async function scheduleRestart(caps) {
-  const dryRun = process.env.DSH_RESTART_BUTTON_DRY_RUN === "1";
-  const scriptPath = join(tmpdir(), `dsh-restart-button-${Date.now().toString(36)}.ps1`);
-  writeFileSync(scriptPath, helperScript(caps, { dryRun }), "utf8");
-  const helperArgs = [
-    "-NoProfile",
-    "-NonInteractive",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-WindowStyle",
-    "Hidden",
-    "-File",
-    scriptPath
-  ];
-  const wmi = await launchViaWmi([POWERSHELL, ...helperArgs].map(quoteWin).join(" "));
-  if (wmi.ok) {
-    return { ok: true, via: "wmi", dryRun, delayMs: HELPER_DELAY_MS, scriptPath, logPath: LOG_PATH };
+function helperStartCount() {
+  try {
+    return (readFileSync(LOG_PATH, "utf8").match(/helper started/g) ?? []).length;
+  } catch {
+    return 0;
   }
-  launchDetached(helperArgs);
+}
+
+async function waitForHelperStart(before, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (helperStartCount() > before) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 120));
+  }
+}
+
+/**
+ * @param caps - Facts about this process and its application.
+ * @param options - `dryRun` skips the actual close/relaunch; also enabled by
+ *   `DSH_RESTART_BUTTON_DRY_RUN=1` or by `?dryRun=1` on the request (a fenced loopback call),
+ *   which is how the HTTP path itself can be exercised without losing the session.
+ */
+async function scheduleRestart(caps, options = {}) {
+  const dryRun = options.dryRun === true || process.env.DSH_RESTART_BUTTON_DRY_RUN === "1";
+  const scriptPath = join(tmpdir(), `dsh-restart-button-${Date.now().toString(36)}.vbs`);
+  writeFileSync(scriptPath, helperVbs(caps, { dryRun }), "utf8");
+
+  const before = helperStartCount();
+  const commandLine = [WSCRIPT, "//B", "//Nologo", scriptPath].map(quoteWin).join(" ");
+  const wmi = await launchViaWmi(commandLine);
+  if (!wmi.ok) {
+    return {
+      ok: false,
+      via: "wmi",
+      dryRun,
+      error: "helper-launch-failed",
+      detail: String(wmi.stderr || wmi.error || "").trim().slice(0, 400),
+      scriptPath,
+      logPath: LOG_PATH
+    };
+  }
+  const started = await waitForHelperStart(before, HELPER_START_TIMEOUT_MS);
+  if (!started) {
+    return {
+      ok: false,
+      via: "wmi",
+      dryRun,
+      error: "helper-did-not-start",
+      detail: `no helper log line within ${HELPER_START_TIMEOUT_MS} ms (script ${scriptPath})`,
+      scriptPath,
+      logPath: LOG_PATH
+    };
+  }
   return {
     ok: true,
-    via: "detached",
+    via: "wmi+wscript",
     dryRun,
     delayMs: HELPER_DELAY_MS,
     scriptPath,
-    logPath: LOG_PATH,
-    wmiError: String(wmi.stderr || wmi.error || "").slice(0, 400)
+    logPath: LOG_PATH
   };
 }
 
@@ -349,8 +483,14 @@ export function apply(ctx) {
           sendJson(response, 409, { ok: false, error: "unavailable", reason: caps.reason });
           return;
         }
-        const outcome = await scheduleRestart(caps);
-        log(`restart scheduled via ${outcome.via} (main pid ${caps.mainPid}, exe ${caps.exe})`);
+        const outcome = await scheduleRestart(caps, {
+          dryRun: /(?:^|[?&])dryRun=1(?:&|$)/.test(String(request.url ?? ""))
+        });
+        log(
+          outcome.ok
+            ? `restart scheduled via ${outcome.via} (main pid ${caps.mainPid}, exe ${caps.exe})`
+            : `restart scheduling failed: ${outcome.error} ${outcome.detail ?? ""}`
+        );
         sendJson(response, outcome.ok ? 200 : 500, outcome);
         return;
       }

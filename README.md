@@ -35,13 +35,15 @@ DSH 桌面端的「应用」菜单是 **Electron 主进程** 用原生 `Menu` �
 
 `POST /restart` 的动作序列：
 
-1. 把一段 PowerShell 助手脚本写到 `%TEMP%\dsh-restart-button-<random>.ps1`；
-2. 通过 **WMI**（`Invoke-CimMethod -ClassName Win32_Process -MethodName Create`）创建它 —— WMI 创建的进程挂在 `WmiPrvSE.exe` 名下，**不属于本应用的进程树**，因此第 4 步「按 exe 路径杀掉整个应用」不会把助手自己一起杀掉（WMI 不可用时退化为 `spawn(..., { detached: true, stdio: "ignore" })`）；
-3. 助手先睡 `1500ms`，让 HTTP 响应先回到页面（否则页面会看到连接被掐断）；
-4. 按 **exe 路径**枚举并终止该应用的所有进程：主进程 + Host + 渲染/GPU 进程 + 用同一个 exe 以 Node 模式跑的插件守护进程（例如 `billion-context` 的 `... start --host 127.0.0.1 --port 18789`），轮询 30s，必要时兜底 `taskkill /IM`；
-5. 从主进程原始命令行里取出参数（正常情况下为空），用 `Start-Process -WorkingDirectory <安装目录>` 重新启动同一个 exe。
+1. 把一段 **VBScript** 助手脚本写到 `%TEMP%\dsh-restart-button-<random>.vbs`；
+2. 用一段隐藏的 PowerShell 只做一件事：通过 **WMI**（`Invoke-CimMethod -ClassName Win32_Process -MethodName Create`）以 `wscript.exe //B //Nologo <脚本>` 创建它 —— WMI 创建的进程挂在 `WmiPrvSE.exe` 名下，**不属于本应用的进程树**，因此第 4 步「按 exe 路径杀掉整个应用」不会把助手自己一起杀掉（WMI 不可用时退化为 `spawn(..., { detached: true, stdio: "ignore" })`）；
+3. 助手先睡 `1500ms`，让 HTTP 响应先回到页面（否则页面会看到连接被掐断）；host 侧 `waitForHelperStart()` 同时轮询日志里的 `helper started`，2s 内没出现就返回 `helper-did-not-start`（页面提示失败并可重试）；
+4. 按 **exe 路径**枚举并终止该应用的所有进程：主进程 + Host + 渲染/GPU 进程 + 用同一个 exe 以 Node 模式跑的插件守护进程（例如 `billion-context` 的 `... start --host 127.0.0.1 --port 18789`），轮询 30s、每 3s 重试终止；
+5. 从主进程原始命令行里取出参数（正常情况下为空），再用 WMI `Win32_Process.Create`（`CommandLine` + `CurrentDirectory`）重新启动同一个 exe。
 
-日志写在 `%TEMP%\dsh-restart-button.log`，每次重启的完整决策链（目标 PID 列表、是否 dry-run、重启命令行）都在里面。
+> **为什么用 VBScript 而不是 PowerShell**：v1.0.1 及以前助手是 PowerShell，`Start-Process` 启动的应用会**继承那个 PowerShell 的控制台**，于是重启后桌面上多出一个 shell 窗口，里面滚着 main 进程的 `Checking for update…`、host 的 `dsh web: …` banner 和插件日志。`DeepSeek Harness.exe` 是 GUI 子系统程序，本身不申请控制台；改成 `wscript`（同为 GUI 子系统）且助手内部**只用 WMI**（不用 `taskkill` / `Start-Process`）后，整条重启链路不再产生任何控制台窗口。顺带两个坑：`powershell -WindowStyle Hidden` **挡不住** Windows Terminal 给控制台程序开标签页；`CREATE_NO_WINDOW` 也无法经 WMI 传给 `Win32_Process.Create`（三参重载返回 `21` / `WBEM_E_INVALID_PARAMETER`）。
+
+日志写在 `%TEMP%\dsh-restart-button.log`，每次重启的完整决策链（`helper started (wscript)`、目标 PID 列表、是否 dry-run、重启命令行）都在里面。
 
 ### client 半边（`client.js`）
 
@@ -150,26 +152,37 @@ pnpm add "file:C:\path\to\dsh-restart-button-1.0.0.tgz"
 
 | 环境变量 | 作用 |
 | --- | --- |
-| `DSH_RESTART_BUTTON_DRY_RUN=1` | 演练模式：助手只把将要终止的 PID 与重启命令行写进日志，**不真的杀进程** |
+| `DSH_RESTART_BUTTON_DRY_RUN=1` | 演练模式：助手只把将要终止的 PID 与重启命令行写进日志，**不真的杀进程**。也可以不设环境变量、临时用 `POST /restart-button/restart?dryRun=1` 演练一次 |
 
 代码内常量（`host.js`）：`ROUTE_PREFIX = "/restart-button"`、`HELPER_DELAY_MS = 1500`。
 
 ## 自测
 
-用 DSH 捆绑的 node（本机 `node` 不在 PATH 时）：
+`GET /restart-button/status` 会打印主进程 PID 与 exe 路径，把它们喂给自测脚本（用 DSH 捆绑的 node，本机 `node` 不在 PATH 时）：
 
 ```powershell
-& "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe" tools\self-test.mjs
+& "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe" `
+  tools\self-test.mjs <mainPid> "C:\Users\22437\AppData\Local\Programs\DeepSeek Harness\DeepSeek Harness.exe"
 ```
 
-它会：生成一份 dry-run 助手脚本 → 用 PowerShell 解析器校验语法 → **用与插件完全相同的 WMI 方式**启动它 → 读日志断言（目标 PID 列表、`dry run: the application is left running`、重启命令行）。整个过程不碰正在运行的应用。
+它跑 8 项断言，整个过程不碰正在运行的应用：
+
+1. 生成的助手源码里不含 `powershell` / `Start-Process` / `taskkill` / `cmd.exe`；
+2. **用与插件完全相同的 WMI 方式**启动 wscript 助手；
+3. 读日志断言 `helper started (wscript)` 与 `targets: <pids>`；
+4. dry-run 走到 `dry run: would start: <exe>`；
+5. 启动前后 `conhost` 进程数必须不变（证明没创建控制台宿主 —— 这正是 .vbs 助手的意义）；
+6. 用 VBS 的 `Win32_Process.Create`（助手重启应用所用的同一个原语）创建进程写文件，断言成功。
 
 实测输出（本机 8 个同 exe 进程）：
 
 ```
-targets: 21152, 5396, 25584, 18908, 17060, 17236, 15228, 23980
+helper started (wscript) target=16852
+targets: 5168, 16852, 19352, 3296, 18780, 20500, 15968, 9348
 dry run: the application is left running
 dry run: would start: C:\...\DeepSeek Harness\DeepSeek Harness.exe
+conhost before=5 after=5
+launchapp returned 19868
 ```
 
 配色自测：`tools/theme-preview.html` 把 DSH 两套 token 值内联进去、复用 `client.js` 的 CSS 渲染浅/深两版弹窗，用无头 Edge 截图即得 `assets/theme-preview.png`：
@@ -194,4 +207,4 @@ MIT © wangbofan
 
 ## English (brief)
 
-`dsh-restart-button` adds a **Restart** button to the DSH desktop titlebar menu bar (Windows). The native「应用」dropdown is built inside the Electron main process and has no plugin extension point, and plugins run in the *Host child process* with no way to call `app.relaunch()`. So the Host half (`host.js`) exposes `POST /restart-button/restart`, which writes a PowerShell helper and creates it through **WMI** (so it lives outside the app's process tree), waits 1.5s, kills every process of the app by executable path, and relaunches the exe. The client half (`client.js`) appends a「重启 / Restart」button to the titlebar menu bar (an open shadow root rendered by the desktop preload) with a confirm popover. Every color comes from DSH's own `--dsw-alias-*` tokens, so the popover follows the shell theme (near-black button with white text in light mode, near-white button with dark text in dark mode). Windows only; hard restart (running tasks are interrupted); no `app.asar` patching.
+`dsh-restart-button` adds a **Restart** button to the DSH desktop titlebar menu bar (Windows). The native「应用」dropdown is built inside the Electron main process and has no plugin extension point, and plugins run in the *Host child process* with no way to call `app.relaunch()`. So the Host half (`host.js`) exposes `POST /restart-button/restart`, which writes a **VBScript** helper and creates it as `wscript.exe //B //Nologo <script>` through **WMI** (so it lives outside the app's process tree), waits 1.5s, kills every process of the app by executable path, and relaunches the exe through WMI only. The helper is deliberately *not* PowerShell and never calls `taskkill`/`Start-Process`: those are console programs, and a console started by the helper is inherited by the relaunched app, which leaves a stray shell window full of `Checking for update…` / `dsh web:` logs (fixed in 1.0.2). The client half (`client.js`) appends a「重启 / Restart」button to the titlebar menu bar (an open shadow root rendered by the desktop preload) with a confirm popover. Every color comes from DSH's own `--dsw-alias-*` tokens, so the popover follows the shell theme (near-black button with white text in light mode, near-white button with dark text in dark mode). Windows only; hard restart (running tasks are interrupted); no `app.asar` patching.
