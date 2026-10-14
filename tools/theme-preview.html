@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>dsh-restart-button theme preview</title>
+<style>
+  /* Token values copied from the DSH shell (app.asar theme CSS):
+     default block = light theme, body[data-ds-dark-theme] = dark theme. */
+  :root {
+    --dsw-alias-bg-base: #ffffff;
+    --dsw-alias-bg-layer-1: #ffffff;
+    --dsw-alias-bg-layer-2: #ffffff;
+    --dsw-alias-bg-mask-1: #0000003d;
+    --dsw-alias-border-l1: #0000000a;
+    --dsw-alias-border-l2: #0000001a;
+    --dsw-alias-border-l3: #0000001f;
+    --dsw-alias-border-l4: #00000029;
+    --dsw-alias-label-primary: #0f1115;
+    --dsw-alias-label-secondary: #61666b;
+    --dsw-alias-label-primary-foreground: #ffffff;
+    --dsw-alias-interactive-bg-hover: #2631480f;
+    --dsw-alias-button-primary-fill: #0f1115;
+    --dsw-alias-button-primary-hover: #43454a;
+    --dsw-alias-button-floating-fill: #ffffff;
+    --dsw-alias-button-floating-hover: #f1f3f5;
+    --dsw-alias-state-business-primary: #4176e6;
+    --dsw-radius-sm: 8px;
+    --dsw-radius-lg: 16px;
+    --dsw-elevation-panel: var(--dsw-elevation-stroke), 0 3px 8px 0 #00000008, 0 0 16px 0 #00000005;
+    --dsw-elevation-stroke: inset 0 0 0 .5px #0000000a;
+    --dsw-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --dsh-windows-titlebar-height: 40px;
+  }
+  [data-ds-dark-theme] {
+    --dsw-alias-bg-base: #151517;
+    --dsw-alias-bg-layer-1: #232324;
+    --dsw-alias-bg-layer-2: #2c2c2e;
+    --dsw-alias-bg-mask-1: #00000080;
+    --dsw-alias-border-l1: #ffffff0f;
+    --dsw-alias-border-l2: #ffffff1f;
+    --dsw-alias-border-l3: #ffffff29;
+    --dsw-alias-border-l4: #ffffff33;
+    --dsw-alias-label-primary: #f9fafb;
+    --dsw-alias-label-secondary: #cfd3d6;
+    --dsw-alias-label-primary-foreground: #0f1115;
+    --dsw-alias-interactive-bg-hover: #ffffff14;
+    --dsw-alias-button-primary-fill: #f9fafb;
+    --dsw-alias-button-primary-hover: #ebeef2;
+    --dsw-alias-button-floating-fill: #2c2c2e;
+    --dsw-alias-button-floating-hover: #353638;
+    --dsw-alias-state-business-primary: #7aaaff;
+    --dsw-elevation-stroke: inset 0 0 0 .5px #ffffff14;
+  }
+
+  body { margin: 0; padding: 24px; display: flex; gap: 24px; background: #f5f6f7; font-family: var(--dsw-font-family); }
+  .panel { flex: 1; border-radius: var(--dsw-radius-lg); overflow: hidden; border: .5px solid var(--dsw-alias-border-l4); }
+  .panel-label { font-size: 12px; color: #61666b; margin: 0 0 8px 2px; font-family: var(--dsw-font-family); }
+  .stage { background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); padding: 0 0 22px; }
+  .titlebar { height: var(--dsh-windows-titlebar-height); display: flex; align-items: center; padding-left: 48px; }
+  .menubar { display: flex; gap: 2px; }
+  .menubar button { height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 14px; cursor: default; }
+  .menubar button:hover, .menubar button[aria-expanded="true"] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+  .popover-demo { margin: 6px 0 0 48px; }
+
+  /* ---- verbatim copy of the popover CSS shipped by client.js ---- */
+  .dsh-restart-popover { position: relative; box-sizing: border-box; width: 296px; padding: 14px; border-radius: var(--dsw-radius-lg, 16px); border: .5px solid var(--dsw-alias-border-l4, rgba(0,0,0,.16)); background: var(--dsw-alias-bg-layer-2, #fff); color: var(--dsw-alias-label-primary, #0f1115); box-shadow: var(--dsw-elevation-panel, 0 3px 8px rgba(0,0,0,.03)); font-family: var(--dsw-font-family, inherit); font-size: 13px; line-height: 1.55; }
+  .dsh-restart-title { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+  .dsh-restart-body { color: var(--dsw-alias-label-secondary, #61666b); }
+  .dsh-restart-hint { margin-top: 8px; font-size: 12px; color: var(--dsw-alias-label-secondary, #61666b); }
+  .dsh-restart-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  .dsh-restart-action { height: 30px; padding: 0 12px; border-radius: var(--dsw-radius-sm, 8px); border: .5px solid transparent; font: inherit; font-size: 13px; cursor: pointer; }
+  .dsh-restart-action-secondary { background: transparent; border-color: var(--dsw-alias-border-l3, rgba(0,0,0,.12)); color: var(--dsw-alias-label-primary, #0f1115); }
+  .dsh-restart-action-secondary:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(38,49,72,.06)); }
+  .dsh-restart-action-primary { background: var(--dsw-alias-button-primary-fill, #0f1115); border-color: var(--dsw-alias-button-primary-fill, #0f1115); color: var(--dsw-alias-label-primary-foreground, #fff); }
+  .dsh-restart-action-primary:hover { background: var(--dsw-alias-button-primary-hover, #43454a); border-color: var(--dsw-alias-button-primary-hover, #43454a); }
+  .dsh-restart-overlay-box { display: inline-flex; flex-direction: column; align-items: center; gap: 10px; padding: 22px 26px; border-radius: var(--dsw-radius-lg, 16px); border: .5px solid var(--dsw-alias-border-l4, rgba(0,0,0,.16)); background: var(--dsw-alias-bg-layer-2, #fff); color: var(--dsw-alias-label-primary, #0f1115); box-shadow: var(--dsw-elevation-panel, 0 3px 8px rgba(0,0,0,.03)); font-family: var(--dsw-font-family, inherit); }
+  .dsh-restart-spinner { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1)); border-top-color: var(--dsw-alias-state-business-primary, #4176e6); }
+  .dsh-restart-overlay-title { font-size: 14px; font-weight: 600; }
+  .dsh-restart-overlay-hint { font-size: 12px; color: var(--dsw-alias-label-secondary, #61666b); }
+  .mask-demo { margin: 14px 0 0 48px; width: 296px; height: 118px; border-radius: var(--dsw-radius-lg); background: var(--dsw-alias-bg-mask-1, rgba(0,0,0,.24)); display: flex; align-items: center; justify-content: center; }
+</style>
+</head>
+<body>
+  <div>
+    <p class="panel-label">浅色主题（DSH 默认）</p>
+    <div class="panel">
+      <div class="stage">
+        <div class="titlebar"><div class="menubar"><button type="button">应用</button><button type="button">编辑</button><button type="button" aria-expanded="true">重启</button></div></div>
+        <div class="popover-demo">
+          <div class="dsh-restart-popover">
+            <div class="dsh-restart-title">重启 DeepSeek Harness</div>
+            <div class="dsh-restart-body">将关闭当前应用与 Host，并立即重新启动。正在运行的任务会被中断。</div>
+            <div class="dsh-restart-hint">重启期间此页面会短暂失联。</div>
+            <div class="dsh-restart-actions"><button class="dsh-restart-action dsh-restart-action-secondary" type="button">取消</button><button class="dsh-restart-action dsh-restart-action-primary" type="button">重启</button></div>
+          </div>
+        </div>
+        <div class="mask-demo"><div class="dsh-restart-overlay-box"><div class="dsh-restart-spinner"></div><div class="dsh-restart-overlay-title">正在重启…</div><div class="dsh-restart-overlay-hint">页面会在应用回来后自动恢复。</div></div></div>
+      </div>
+    </div>
+  </div>
+  <div>
+    <p class="panel-label">深色主题（data-ds-dark-theme）</p>
+    <div class="panel" data-ds-dark-theme>
+      <div class="stage" style="background: var(--dsw-alias-bg-base)">
+        <div class="titlebar"><div class="menubar"><button type="button">应用</button><button type="button">编辑</button><button type="button" aria-expanded="true">重启</button></div></div>
+        <div class="popover-demo">
+          <div class="dsh-restart-popover">
+            <div class="dsh-restart-title">重启 DeepSeek Harness</div>
+            <div class="dsh-restart-body">将关闭当前应用与 Host，并立即重新启动。正在运行的任务会被中断。</div>
+            <div class="dsh-restart-hint">重启期间此页面会短暂失联。</div>
+            <div class="dsh-restart-actions"><button class="dsh-restart-action dsh-restart-action-secondary" type="button">取消</button><button class="dsh-restart-action dsh-restart-action-primary" type="button">重启</button></div>
+          </div>
+        </div>
+        <div class="mask-demo"><div class="dsh-restart-overlay-box"><div class="dsh-restart-spinner"></div><div class="dsh-restart-overlay-title">正在重启…</div><div class="dsh-restart-overlay-hint">页面会在应用回来后自动恢复。</div></div></div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

@@ -126,6 +126,26 @@ pnpm add "file:C:\path\to\dsh-restart-button-1.0.0.tgz"
 
 > 位置说明：原生「应用」下拉的菜单项列表在 Electron 主进程内，插件无法插入菜单项，所以按钮做在菜单栏上、紧邻「应用」。
 
+## 配色（跟随 DSH 主题）
+
+弹窗、遮罩、按钮**全部使用 DSH 自己的语义 token**（`--dsw-alias-*`），因此和原生菜单一样随外观切换：浅色主题下是「近黑按钮 + 白字」，深色主题下是「近白按钮 + 深字」。没有写死颜色（`var()` 逗号后的值只是 token 缺失时的兜底）。
+
+![浅色 / 深色主题下的弹窗](assets/theme-preview.png)
+
+| 元素 | token | 浅色（DSH 默认） | 深色 |
+| --- | --- | --- | --- |
+| 菜单栏「重启」按钮 | 继承 preload shadow root 里 `button` 的样式：`interactive-bg-hover` + `label-primary` | 文字 `#61666b`；悬停底 `rgba(38,49,72,.06)`、文字 `#0f1115` | 文字 `#cfd3d6`；悬停底 `rgba(255,255,255,.08)`、文字 `#f9fafb` |
+| 弹窗背景 / 边框 | `bg-layer-2` / `border-l4` | `#ffffff` / `rgba(0,0,0,.16)` | `#2c2c2e` / `rgba(255,255,255,.2)` |
+| 弹窗阴影 / 圆角 | `elevation-panel` / `radius-lg` | 与 DSH 浮层一致 | 与 DSH 浮层一致 |
+| 主按钮「重启」 | `button-primary-fill` + `label-primary-foreground` | 底 `#0f1115`、字 `#ffffff` | 底 `#f9fafb`、字 `#0f1115` |
+| 主按钮悬停 | `button-primary-hover` | `#43454a` | `#ebeef2` |
+| 次按钮「取消」 | `label-primary` + `border-l3` | 字 `#0f1115`、边 `rgba(0,0,0,.12)` | 字 `#f9fafb`、边 `rgba(255,255,255,.16)` |
+| 重启遮罩 | `bg-mask-1` | `rgba(0,0,0,.24)` | `rgba(0,0,0,.5)` |
+| 浮动兜底按钮 | `button-floating-fill` + `border-l3` | 底 `#ffffff`、字 `#0f1115` | 底 `#2c2c2e`、字 `#f9fafb` |
+| 转圈 | `state-business-primary` | `#4176e6` | `#7aaaff` |
+
+> v1.0.0 曾用 `--dsw-alias-brand-primary` 当主按钮底色：深色主题下它是近白色（`#f9fafb`），而文字写死 `#fff` —— 按钮上的字几乎看不见。现已改成 DSH 原装的 `button-primary-fill` + `label-primary-foreground` 配对。
+
 ## 配置
 
 | 环境变量 | 作用 |
@@ -152,6 +172,13 @@ dry run: the application is left running
 dry run: would start: C:\...\DeepSeek Harness\DeepSeek Harness.exe
 ```
 
+配色自测：`tools/theme-preview.html` 把 DSH 两套 token 值内联进去、复用 `client.js` 的 CSS 渲染浅/深两版弹窗，用无头 Edge 截图即得 `assets/theme-preview.png`：
+
+```powershell
+& "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --headless=new --disable-gpu --hide-scrollbars `
+  --force-device-scale-factor=2 --window-size=780,470 --screenshot=assets\theme-preview.png tools\theme-preview.html
+```
+
 ## 兼容性与限制
 
 - 仅 **Windows 桌面端**；`dsh web` 下 `capabilities()` 会返回 `available: false`（`reason: "not-supervised"`），client 半边退化为浮动按钮但点击会提示不可用。
@@ -167,4 +194,4 @@ MIT © wangbofan
 
 ## English (brief)
 
-`dsh-restart-button` adds a **Restart** button to the DSH desktop titlebar menu bar (Windows). The native「应用」dropdown is built inside the Electron main process and has no plugin extension point, and plugins run in the *Host child process* with no way to call `app.relaunch()`. So the Host half (`host.js`) exposes `POST /restart-button/restart`, which writes a PowerShell helper and creates it through **WMI** (so it lives outside the app's process tree), waits 1.5s, kills every process of the app by executable path, and relaunches the exe. The client half (`client.js`) appends a「重启 / Restart」button to the titlebar menu bar (an open shadow root rendered by the desktop preload) with a confirm popover. Windows only; hard restart (running tasks are interrupted); no `app.asar` patching.
+`dsh-restart-button` adds a **Restart** button to the DSH desktop titlebar menu bar (Windows). The native「应用」dropdown is built inside the Electron main process and has no plugin extension point, and plugins run in the *Host child process* with no way to call `app.relaunch()`. So the Host half (`host.js`) exposes `POST /restart-button/restart`, which writes a PowerShell helper and creates it through **WMI** (so it lives outside the app's process tree), waits 1.5s, kills every process of the app by executable path, and relaunches the exe. The client half (`client.js`) appends a「重启 / Restart」button to the titlebar menu bar (an open shadow root rendered by the desktop preload) with a confirm popover. Every color comes from DSH's own `--dsw-alias-*` tokens, so the popover follows the shell theme (near-black button with white text in light mode, near-white button with dark text in dark mode). Windows only; hard restart (running tasks are interrupted); no `app.asar` patching.

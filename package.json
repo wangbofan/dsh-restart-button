@@ -1,6 +1,6 @@
 {
   "name": "dsh-restart-button",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "DSH desktop titlebar menu: a Restart button that closes and relaunches the whole app (shell + Host).",
   "type": "module",
   "main": "host.js",
